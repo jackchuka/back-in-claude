@@ -49,19 +49,30 @@ Full rationale, including the alternatives that were rejected and why, is in
    | `NTFY_TOPIC`              | the random string from step 3  |
    | `NOTIFY_EMAIL`            | optional, for email delivery   |
 
-5. **Protect `main` — with a bypass for the bot.** The workflow pushes
-   `state.json` to `main`, and `GITHUB_TOKEN` cannot push to a branch that
-   requires pull requests. Use a **ruleset** (Settings → Rules → Rulesets), not
-   classic branch protection:
+5. **Protect `main` — but only with rules the bot can survive.** The workflow
+   pushes `state.json` directly to `main` roughly 40–50 times a day. Use a
+   **ruleset** (Settings → Rules → Rulesets), not classic branch protection:
 
    - Target branch: `main`
-   - Enable **Restrict deletions**, **Block force pushes**, and **Require status
-     checks to pass** (select the `check` job from `ci.yml`).
-   - Do **not** enable _Require a pull request before merging_ unless you also
-     add `github-actions` as a **bypass actor**. Without that bypass every state
-     commit fails to push, the run goes red, `last_probe` never advances in the
-     committed state, the hourly free-state throttle never engages, and you
-     receive duplicate reset notifications.
+   - Enable **Restrict deletions** and **Block force pushes**. Neither blocks a
+     normal fast-forward push, so the bot is unaffected.
+   - **Do not enable _Require a pull request before merging_ or _Require status
+     checks to pass_.** Both reject direct pushes — a status check rule rejects
+     them because a direct push has no check run attached to its commit, which
+     is easy to miss since the rule sounds like it only governs PRs. Either one
+     makes every state commit fail to push: the run goes red, `last_probe` never
+     advances in the committed state, the hourly free-state throttle never
+     engages, and you receive duplicate reset notifications.
+
+   > On an **organisation-owned** repository you can keep those two rules by
+   > adding the `GitHub Actions` app as a **bypass actor**. On a **personal**
+   > repository you cannot — GitHub rejects it with _"Actor GitHub Actions
+   > integration must be part of the ruleset source or owner organization"_ —
+   > so the rules above are the only workable configuration.
+
+   You lose no visibility: `ci.yml` still runs on every push and pull request,
+   so a failure is still red and still obvious. What you give up is the ability
+   to _block_ a merge on it.
 
    The workflow file is the sensitive asset: anyone who can change it can read
    the token. Review any pull request touching `.github/workflows/` accordingly.
