@@ -1,12 +1,12 @@
 {
-  "state": "unknown",
-  "since": null,
-  "last_probe": null,
-  "last_result": null,
+  "state": "free",
+  "since": "2026-08-14T08:27:56.570Z",
+  "last_probe": "2026-08-14T08:27:56.570Z",
+  "last_result": "ok",
   "consecutive_errors": 0,
   "notified": {
     "limit_reset": null,
     "auth_failed": null,
-    "liveness": null
+    "liveness": "2026-08-14T08:27:56.570Z"
   }
 }
