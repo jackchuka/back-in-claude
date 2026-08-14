@@ -1,0 +1,53 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      # Separate steps rather than `npm run check`, so a red build names the
+      # gate that failed without opening the log.
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm test
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      # Static analysis for workflow misconfiguration: unpinned actions,
+      # dangerous triggers, script injection, over-broad permissions. A future
+      # regression fails the build instead of shipping. Pinned to the exact
+      # version verified locally rather than resolving latest at runtime; this
+      # job has no secrets, since the audit is local to .github/workflows/.
+      #
+      # --min-severity=medium: zizmor exits non-zero on ANY finding, including
+      # the one `adhoc-packages` low we deliberately accept (installing the
+      # Claude CLI globally cannot come from a lockfile). Without a threshold
+      # this job fails permanently on a finding we already triaged. Verified
+      # both directions: clean tree exits 0, and removing `persist-credentials:
+      # false` from probe.yml resurfaces `artipacked` (medium) and exits 13 —
+      # so this raises the bar without blinding the job to real findings. The
+      # low is still printed in the log, just not fatal.
+      - run: pipx run zizmor==1.29.0 --min-severity=medium --format plain .github/workflows/

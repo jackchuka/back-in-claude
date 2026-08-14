@@ -1,0 +1,63 @@
+# Dependabot configuration file
+# See: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  # npm (devDependencies only — this project has zero runtime dependencies)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    reviewers:
+      - "jackchuka"
+    labels:
+      - "dependencies"
+      - "javascript"
+    target-branch: "main"
+    groups:
+      # oxlint-tsgolint embeds a typescript-go build and its version tracks the
+      # compiler (7.0.2001 pairs with typescript 7.0.2). Bumping one without the
+      # other would leave the linter type-checking against a different compiler
+      # than `tsc` uses. Group them so they can only move together.
+      typescript-toolchain:
+        patterns:
+          - "typescript"
+          - "oxlint-tsgolint"
+      # oxfmt is pre-1.0: its formatting output shifts between minor versions,
+      # which would reformat the whole tree. Patch-only, and reviewed alone.
+      oxc:
+        patterns:
+          - "oxlint"
+          - "oxfmt"
+
+  # GitHub Actions
+  #
+  # This is the more important half. Every action here is pinned to a full
+  # commit SHA because this repository holds a token equivalent to full Claude
+  # account access — a floating tag could silently gain access to it. SHA pins
+  # do not expire, so without Dependabot they simply rot: this is what keeps
+  # them current, and each bump arrives as a reviewable PR rather than a
+  # surprise. Note ci.yml runs on pull_request with no secrets, so these PRs
+  # get tested safely.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    reviewers:
+      - "jackchuka"
+    assignees:
+      - "jackchuka"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    target-branch: "main"

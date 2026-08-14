@@ -1,0 +1,12 @@
+{
+  "state": "unknown",
+  "since": null,
+  "last_probe": null,
+  "last_result": null,
+  "consecutive_errors": 0,
+  "notified": {
+    "limit_reset": null,
+    "auth_failed": null,
+    "liveness": null
+  }
+}

@@ -1,0 +1,118 @@
+name: probe
+
+on:
+  schedule:
+    # Every 10 minutes. The cadence gate in src/cadence.ts decides whether a tick
+    # actually spends quota: every tick while `blocked`, hourly while `free`.
+    # The cheap no-op ticks are free ONLY because this repository is public —
+    # private repos bill each run at a one-minute floor, which at */10 is
+    # 144 min/day and would exhaust a 2,000 min/month allowance in two weeks.
+    #
+    # ⚠️ If this repository is ever made private again, drop this schedule to
+    # '*/30' or remove it. The comment is the only thing guarding that.
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Scopes the secrets to the `main` branch: create this environment with
+    # "Deployment branches: selected branches -> main" and put the three secrets
+    # in it rather than at repository level. A workflow running on any other ref
+    # then cannot read them. Note GitHub Free offers Environments on public
+    # repositories only — on a private copy, use repository secrets and delete
+    # this line.
+    environment: production
+    permissions:
+      contents: write # commit state.json
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          # The GITHUB_TOKEN must not sit in .git/config while `npm install -g`
+          # runs package scripts and the Claude CLI executes. The push step below
+          # supplies it explicitly instead, after all third-party code has run.
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "24"
+
+      - name: Cache the Claude CLI
+        id: cli-cache
+        # v4 declared `runs.using: node20`, which GitHub is deprecating and which
+        # emitted a warning on every run. v6 runs on node24. Its only breaking
+        # change from v5 was an internal ESM migration — the path/key API is
+        # unchanged, so the existing `claude-cli-v1` cache entry stays valid.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm-global
+          key: claude-cli-v1
+
+      - name: Install the Claude CLI
+        if: steps.cli-cache.outputs.cache-hit != 'true'
+        run: |
+          npm config set prefix ~/.npm-global
+          npm install -g @anthropic-ai/claude-code
+
+      - name: Put the CLI on PATH
+        run: echo "$HOME/.npm-global/bin" >> "$GITHUB_PATH"
+
+      - name: Probe
+        id: probe
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+        run: node src/main.ts
+
+      - name: Commit state
+        # always() is load-bearing. main.ts writes GITHUB_OUTPUT before it
+        # notifies, so `changed` is set even when a notification throws and the
+        # probe step goes red. Without always(), a failed notification would skip
+        # this commit, discard an already-persisted transition, and the next run
+        # would re-detect the same reset and notify again.
+        #
+        # The second disjunct (result != 'skipped') is what makes the probe
+        # throttle work: isProbeDue reads last_probe from the *committed*
+        # state.json. hasMeaningfulChange excludes last_probe from `changed`,
+        # so a steady-state run that didn't transition would otherwise skip
+        # the commit, last_probe would never advance in the committed file,
+        # and every tick would probe regardless of the free-state backoff.
+        # Committing whenever a probe actually ran costs one extra commit per
+        # probe, in exchange for the throttle functioning at all.
+        if: always() && (steps.probe.outputs.changed == 'true' || steps.probe.outputs.result != 'skipped')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ steps.probe.outputs.result }}
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_SYSTEM: /dev/null
+        run: |
+          # $GITHUB_PATH prepends ~/.npm-global/bin, so a postinstall script could
+          # plant an executable named `git` (or `sh`) that would win the lookup in
+          # this step, where GH_TOKEN is in the environment. Reset PATH to system
+          # paths only. GIT_CONFIG_GLOBAL/SYSTEM=/dev/null likewise neutralise a
+          # planted ~/.gitconfig alias or credential helper.
+          export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add state.json
+          git diff --staged --quiet || git commit -m "chore: state -> ${RESULT}"
+          # On a conflict, abort back to our own commit and let the push below
+          # fail on its own merits. `|| true` here would swallow the conflict,
+          # leave HEAD at the upstream tip, and turn the push into a silent
+          # no-op — a green run that dropped this run's state. Failing loudly is
+          # the correct behaviour: a red run is visible, a silent drop is not.
+          git -c core.hooksPath=/dev/null \
+              -c credential.helper='!f(){ echo username=x-access-token; echo "password=$GH_TOKEN"; }; f' \
+              pull --rebase origin "$GITHUB_REF_NAME" || git rebase --abort
+          git -c core.hooksPath=/dev/null \
+              -c credential.helper='!f(){ echo username=x-access-token; echo "password=$GH_TOKEN"; }; f' \
+              push origin HEAD:"$GITHUB_REF_NAME"
