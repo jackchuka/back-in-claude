@@ -50,14 +50,13 @@ describe("run", () => {
     );
 
     assert.equal(out.result, "ok");
-    assert.equal(out.probed, true);
     assert.equal(out.changed, true);
     assert.equal(sent.length, 1);
     assert.equal(sent[0]?.kind, "limit_reset");
     assert.equal((await readState(p)).state, "free");
   });
 
-  it("skips the probe entirely when not due", async () => {
+  it("probes on every run, however recently the last probe ran", async () => {
     const p = await seed({ state: "free", last_probe: NOW });
     let probeCalls = 0;
     const out = await run(
@@ -69,30 +68,31 @@ describe("run", () => {
       }),
     );
 
-    assert.equal(probeCalls, 0, "free + just probed must not spend quota");
-    assert.equal(out.probed, false);
-    assert.equal(out.result, null);
+    assert.equal(probeCalls, 1, "the cron is the only throttle");
+    assert.equal(out.result, "ok");
   });
 
-  it("probes when blocked and the interval has elapsed", async () => {
-    const p = await seed({ state: "blocked", last_probe: "2026-08-14T05:00:00.000Z" });
-    let probeCalls = 0;
-    await run(
-      deps(p, {
-        probeImpl: async (): Promise<RawProbe> => {
-          probeCalls += 1;
-          return OK;
-        },
-      }),
-    );
-    assert.equal(probeCalls, 1);
+  // `changed` is the sole commit trigger, and a steady-state tick advances only
+  // last_probe. If that counted, git log would become a per-tick public record
+  // of this account's rate-limit pattern.
+  it("reports no change on a steady-state probe, so the tick does not commit", async () => {
+    const p = await seed({
+      state: "free",
+      last_result: "ok",
+      last_probe: "2026-08-14T05:00:00.000Z",
+    });
+    const out = await run(deps(p));
+
+    assert.equal(out.result, "ok");
+    assert.equal(out.changed, false, "free -> free must not produce a commit");
+    assert.equal((await readState(p)).last_probe, NOW, "but it is still written to disk");
   });
 
-  it("sends the liveness ping even on a tick with no probe", async () => {
+  it("sends the liveness ping alongside a non-transitioning probe", async () => {
     const p = await tmpPath();
     await writeState(p, { ...INITIAL_STATE, state: "free", last_probe: NOW });
     const sent: Notification[] = [];
-    const out = await run(
+    await run(
       deps(p, {
         notifyImpl: async (n: Notification) => {
           sent.push(n);
@@ -100,8 +100,7 @@ describe("run", () => {
       }),
     );
 
-    assert.equal(out.probed, false, "no probe was due");
-    assert.equal(sent.length, 1);
+    assert.equal(sent.length, 1, "free -> free notifies nothing of its own");
     assert.equal(sent[0]?.kind, "liveness");
     assert.equal((await readState(p)).notified.liveness, NOW);
   });

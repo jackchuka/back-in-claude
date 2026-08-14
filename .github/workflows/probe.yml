@@ -2,15 +2,15 @@ name: probe
 
 on:
   schedule:
-    # Every 10 minutes. The cadence gate in src/cadence.ts decides whether a tick
-    # actually spends quota: every tick while `blocked`, hourly while `free`.
-    # The cheap no-op ticks are free ONLY because this repository is public —
-    # private repos bill each run at a one-minute floor, which at */10 is
-    # 144 min/day and would exhaust a 2,000 min/month allowance in two weeks.
+    # THIS IS THE ONLY THROTTLE — every delivered tick spends quota, so this
+    # number is the whole budget. Pick one payable at 100% delivery:
+    #   */10 -> 144 probes/day   */20 -> 72/day   */30 -> 48/day
+    # At */20 that is ~$3.40/day worst case; GitHub currently delivers closer to
+    # one tick per hour whatever this says.
     #
-    # ⚠️ If this repository is ever made private again, drop this schedule to
-    # '*/30' or remove it. The comment is the only thing guarding that.
-    - cron: "*/10 * * * *"
+    # ⚠️ On a private repo Actions minutes bill at a one-minute floor per run —
+    # drop to '*/30' or remove the schedule.
+    - cron: "*/20 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -80,15 +80,11 @@ jobs:
         # this commit, discard an already-persisted transition, and the next run
         # would re-detect the same reset and notify again.
         #
-        # The second disjunct (result != 'skipped') is what makes the probe
-        # throttle work: isProbeDue reads last_probe from the *committed*
-        # state.json. hasMeaningfulChange excludes last_probe from `changed`,
-        # so a steady-state run that didn't transition would otherwise skip
-        # the commit, last_probe would never advance in the committed file,
-        # and every tick would probe regardless of the free-state backoff.
-        # Committing whenever a probe actually ran costs one extra commit per
-        # probe, in exchange for the throttle functioning at all.
-        if: always() && (steps.probe.outputs.changed == 'true' || steps.probe.outputs.result != 'skipped')
+        # `!= 'false'` also covers an empty output, which means the probe step
+        # died before emitting — possibly after writeState already persisted a
+        # transition. Committing then is free (git commit is a no-op when nothing
+        # differs); skipping it would drop the transition.
+        if: always() && steps.probe.outputs.changed != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           RESULT: ${{ steps.probe.outputs.result }}
@@ -104,7 +100,8 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add state.json
-          git diff --staged --quiet || git commit -m "chore: state -> ${RESULT}"
+          # RESULT is empty when the probe step died before emitting outputs.
+          git diff --staged --quiet || git commit -m "chore: state -> ${RESULT:-unknown}"
           # On a conflict, abort back to our own commit and let the push below
           # fail on its own merits. `|| true` here would swallow the conflict,
           # leave HEAD at the upstream tip, and turn the push into a silent

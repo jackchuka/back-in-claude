@@ -9,13 +9,17 @@ A scheduled job runs one minimal Claude Code prompt using a subscription-issued
 `CLAUDE_CODE_OAUTH_TOKEN`. Rate-limited means still blocked; success means the
 window is open. The `blocked → free` transition sends the notification.
 
-Probing is adaptive: every 10 minutes while `blocked` or `unknown`, hourly while
-`free` — while free it is only watching for `free → blocked`, which is not
-notified, so detecting that up to an hour late costs nothing.
+Every delivered tick probes. The cron expression is the only throttle, so it is
+also the entire budget — `*/20` caps the cost at 72 probes/day and detects a
+reset within 20 minutes of it happening.
 
 A probe costs 4,692 cache-creation input tokens plus 16 output tokens, about
-$0.047 — measured, not estimated. At this cadence that works out to roughly 0.4%
-of a normal working day's usage.
+$0.047 — measured, not estimated. At `*/20` that is under 1% of a normal working
+day's usage, and less in practice: GitHub delivers scheduled workflows on public
+repositories unreliably, closer to one tick per hour than three.
+
+`state.json` is committed only when the state means something new, so `git log`
+records transitions rather than every tick.
 
 Full rationale, including the alternatives that were rejected and why, is in
 [docs/DESIGN.md](docs/DESIGN.md).
@@ -50,8 +54,9 @@ Full rationale, including the alternatives that were rejected and why, is in
    | `NOTIFY_EMAIL`            | optional, for email delivery   |
 
 5. **Protect `main` — but only with rules the bot can survive.** The workflow
-   pushes `state.json` directly to `main` roughly 40–50 times a day. Use a
-   **ruleset** (Settings → Rules → Rulesets), not classic branch protection:
+   pushes `state.json` directly to `main` on every state transition, a handful
+   of times a day. Use a **ruleset** (Settings → Rules → Rulesets), not classic
+   branch protection:
 
    - Target branch: `main`
    - Enable **Restrict deletions** and **Block force pushes**. Neither blocks a
@@ -60,9 +65,8 @@ Full rationale, including the alternatives that were rejected and why, is in
      checks to pass_.** Both reject direct pushes — a status check rule rejects
      them because a direct push has no check run attached to its commit, which
      is easy to miss since the rule sounds like it only governs PRs. Either one
-     makes every state commit fail to push: the run goes red, `last_probe` never
-     advances in the committed state, the hourly free-state throttle never
-     engages, and you receive duplicate reset notifications.
+     makes every state commit fail to push: the run goes red and the transition
+     is lost, so the next probe re-detects the same reset and notifies again.
 
    > On an **organisation-owned** repository you can keep those two rules by
    > adding the `GitHub Actions` app as a **bypass actor**. On a **personal**
@@ -162,11 +166,10 @@ natively, so nothing is compiled before it runs. Zero runtime dependencies.
   `probe.yml` pins whatever CLI build was cached under that key until the key
   itself is bumped. Detection is loud, not silent: an expired or incompatible
   CLI surfaces as `auth_failed`, which notifies immediately.
-- **The workflow commits on every probe** — roughly 40–50 commits/day to `main`.
-  That is deliberate: `isProbeDue` reads `last_probe` from the _committed_
-  `state.json`, so without those commits the hourly throttle would never engage
-  and every tick would probe. The side effect is that `git log` becomes a
-  minute-resolution public record of your rate-limit pattern.
+- **`git log` is public and records your limit transitions.** Commits land only
+  on real state changes, not on every probe, but on a public repository the
+  timestamps still show roughly when you get capped and when the window reopens.
+  Use a private repo if that matters.
 
 ## License
 
