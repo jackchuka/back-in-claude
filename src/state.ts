@@ -55,15 +55,15 @@ export async function writeState(path: string, state: State): Promise<void> {
 }
 
 /**
- * True when anything other than `last_probe` differs.
+ * True when anything other than `last_probe` differs. This is the sole commit
+ * trigger.
  *
- * `last_probe` is excluded here because this function only reports whether the
- * *meaning* of the state changed. The workflow still commits on every probe --
- * its `result != 'skipped'` output triggers that, not this function -- so
- * `last_probe` does advance in the committed state.json, which is exactly what
- * lets the free-state throttle read a fresh `last_probe` on the next run.
- * Everything else -- including consecutive_errors and the liveness latch --
- * must survive, or streak counts and heartbeat timing reset every run.
+ * `last_probe` changes on every probe while meaning nothing new, so including it
+ * would put a commit on every tick and turn `git log` into a minute-resolution
+ * public record of when this account gets capped. Nothing reads it back -- the
+ * liveness ping only reports it -- so a stale value in the committed file costs
+ * nothing. Everything else must survive, or streak counts and heartbeat timing
+ * reset every run.
  */
 export function hasMeaningfulChange(before: State, after: State): boolean {
   return JSON.stringify(strip(before)) !== JSON.stringify(strip(after));

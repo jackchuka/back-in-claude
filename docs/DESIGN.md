@@ -107,26 +107,40 @@ GitHub Actions cron (*/10)
    └──────────┘         + X-Email  ──► email
 ```
 
-### Adaptive cadence
+### Cadence
 
-The cron fires every 10 minutes, but **a probe only runs when it is due**:
+**The cron expression is the only throttle.** Every delivered tick probes.
+`*/20` caps the draw at 72 probes/day (~$3.40) and bounds reset detection at 20
+minutes. Choose the value payable at 100% delivery — `*/10` is 144/day, `*/30`
+is 48/day — because nothing downstream will reduce it.
 
-| State     | Probe interval      | Why                                                                                                                                        |
-| --------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `blocked` | 10 min (every tick) | This is the only period where precision matters.                                                                                           |
-| `free`    | 60 min              | Only watching for `free → blocked`, which is not notified. Detecting it up to an hour late costs nothing: the reset is still ~5 hours out. |
-| `unknown` | 10 min              | Re-establish ground truth quickly.                                                                                                         |
+An earlier design put a state-dependent gate in front of the probe: 10 minutes
+while `blocked`, 60 while `free`, on the argument that `free → blocked` is never
+notified and so can be learned late for free. It reallocated a fixed budget
+toward the window where precision matters, and on paper it was quota-neutral
+against a uniform `*/30`.
 
-This is only possible because **public repositories get unlimited free Actions
-minutes**, so the cheap no-op ticks are free. On a private repo the one-minute
-billing floor made every tick cost a minute, which forced a uniform `*/30` and a
-30-minute worst-case detection lag. Going public buys 10-minute precision _and_
-lowers quota consumption — roughly 49 probes/day versus 48, with three times the
-resolution where it counts.
+It was removed for two reasons.
 
-`*/10` rather than `*/5` is deliberate restraint: 144 runs/day is a reasonable
-draw on free shared infrastructure, and GitHub deprioritizes very frequent
-schedules under load anyway.
+**The premise did not hold.** GitHub delivers scheduled workflows on public
+repositories at roughly one tick per hour — measured at 6 of ~32 expected ticks
+over 5h18m. A gate cannot concentrate ticks that were never delivered, and its
+60-minute free interval sat at the delivery rate itself, so it subtracted from an
+allowance already below its own target while adding latency.
+
+**It made `last_probe` load-bearing.** The gate read `last_probe` from the
+_committed_ `state.json`, which meant committing on every probe rather than on
+every change. That cost 40–50 commits/day to `main`, published a
+minute-resolution record of the account's rate-limit pattern in `git log`, and
+made ordinary branch protection break notification correctness. Removing the gate
+leaves nothing reading `last_probe` back, so commits follow state changes and all
+three costs go with it.
+
+The remaining sensitivity is that comparing `now` against an execution-time
+stamp drifts: each stamp lands a few seconds later than the tick that produced
+it, so a fixed interval rejects ticks arriving fractionally early. That is what
+made the gate skip a tick 10.4 seconds short of its hour. A cron-only throttle
+has no such comparison.
 
 ### 1. Prober
 
@@ -305,7 +319,8 @@ guarantee for a watchdog, which is why the liveness ping exists as the backstop.
 - **Prober classification:** unit tests over captured fixtures of each outcome.
 - **State machine:** pure function, table-driven tests over every row above.
   This is where correctness lives and it needs no network.
-- **Cadence gate:** pure function, tested against the interval table.
+- **Liveness cadence:** pure function, tested at the interval boundary and
+  against unparseable and future-dated stamps.
 - **Notifier:** injected fetch; one manual end-to-end send confirming both push
   and email land.
 - **Workflow security:** `zizmor` in CI.

@@ -1,6 +1,6 @@
 import { appendFile } from "node:fs/promises";
 import { classify } from "./classify.ts";
-import { isLivenessDue, isProbeDue, livenessNotification } from "./cadence.ts";
+import { isLivenessDue, livenessNotification } from "./cadence.ts";
 import { notify as defaultNotify } from "./notify.ts";
 import { probe as defaultProbe } from "./probe.ts";
 import { hasMeaningfulChange, readState, writeState } from "./state.ts";
@@ -20,18 +20,18 @@ export type RunDeps = {
 };
 
 export type RunOutcome = {
-  readonly result: ProbeResult | null;
-  readonly probed: boolean;
+  readonly result: ProbeResult;
   readonly changed: boolean;
   readonly notifications: readonly Notification[];
   /**
    * Sanitized probe diagnostics for the run log — exit code and stream lengths
-   * only, never content. Empty string when no probe ran. Safe to print in a
-   * world-readable log; raw stdout/stderr never is.
+   * only, never content. Safe to print in a world-readable log; raw
+   * stdout/stderr never is.
    */
   readonly diag: string;
 };
 
+/** Every delivered tick probes; the cron expression in probe.yml is the throttle. */
 export async function run({
   statePath,
   topic,
@@ -45,9 +45,6 @@ export async function run({
   const notifications: Notification[] = [];
   let working: State = before;
 
-  // Liveness is independent of probing: it must fire even on a tick where no
-  // probe is due, because a dead schedule is precisely what it detects.
-  //
   // The STAMP is applied here, before transition() consumes `working` — if it
   // were applied afterwards, transition's spread of the older `notified` would
   // discard it and the heartbeat would re-fire forever. The NOTIFICATION is held
@@ -59,22 +56,16 @@ export async function run({
     working = { ...working, notified: { ...working.notified, liveness: nowIso } };
   }
 
-  let result: ProbeResult | null = null;
-  // Sanitized diagnostics. An `error` classification is otherwise undebuggable
-  // from CI, because raw CLI output carries session_id/cost/usage and the run
-  // logs are world-readable once this repo is public. Exit code and stream
-  // LENGTHS carry no secrets, and they separate the cases that matter:
-  // 127 = binary missing, 124 = timeout, 1 + empty streams = produced nothing,
-  // 0 + non-empty stdout = ran but did not parse as expected.
-  let diag = "";
-  if (isProbeDue(working, nowIso)) {
-    const raw = await probeImpl();
-    result = classify(raw);
-    diag = ` exit=${raw.exitCode} out=${raw.stdout.length} err=${raw.stderr.length}`;
-    const outcome = transition(working, result, nowIso);
-    working = outcome.next;
-    notifications.push(...outcome.notifications);
-  }
+  const raw = await probeImpl();
+  const result = classify(raw);
+  // Exit code and stream LENGTHS carry no secrets, unlike the raw output, and
+  // they separate the cases that matter: 127 = binary missing, 124 = timeout,
+  // 1 + empty streams = produced nothing, 0 + non-empty stdout = ran but did
+  // not parse as expected.
+  const diag = ` exit=${raw.exitCode} out=${raw.stdout.length} err=${raw.stderr.length}`;
+  const outcome = transition(working, result, nowIso);
+  working = outcome.next;
+  notifications.push(...outcome.notifications);
 
   // Persist BEFORE notifying. If ntfy fails after we have already decided the
   // limit reset, re-detecting it next run would double-notify.
@@ -82,13 +73,11 @@ export async function run({
   const changed = hasMeaningfulChange(before, working);
 
   // Emit the workflow signal BEFORE notifying, too. Writing to the runner's disk
-  // is not persistence — only the commit is, and the workflow commits only when
-  // it sees `changed`. If a notification throws with this block after the loop,
-  // `run` rejects, `changed` is never emitted, the commit is skipped, and the
-  // next run re-detects the same reset and notifies again. That is precisely the
-  // double-notify the write-first ordering exists to prevent.
+  // is not persistence — only the commit is, and the workflow commits on
+  // `changed`. A notification that threw ahead of this would reject `run`, skip
+  // the commit, and leave the next run to re-detect the same reset.
   const ghOutput = process.env["GITHUB_OUTPUT"];
-  if (ghOutput) await appendFile(ghOutput, `changed=${changed}\nresult=${result ?? "skipped"}\n`);
+  if (ghOutput) await appendFile(ghOutput, `changed=${changed}\nresult=${result}\n`);
 
   // Transition notifications first, liveness last. The loop aborts on the first
   // failure, so a flaky low-priority heartbeat must not be able to suppress the
@@ -96,7 +85,7 @@ export async function run({
   if (liveness) notifications.push(liveness);
   for (const n of notifications) await notifyImpl(n, { topic, email });
 
-  return { result, probed: result !== null, changed, notifications, diag };
+  return { result, changed, notifications, diag };
 }
 
 /**
@@ -112,12 +101,12 @@ function safeMessage(err: unknown): string {
 
 if (import.meta.filename === process.argv[1]) {
   try {
-    const { result, probed, changed, diag } = await run({
+    const { result, changed, diag } = await run({
       statePath: process.env["STATE_PATH"] ?? "state.json",
       topic: process.env["NTFY_TOPIC"] ?? "",
       email: process.env["NOTIFY_EMAIL"] ?? null,
     });
-    console.log(`probed=${probed} result=${result ?? "skipped"} changed=${changed}${diag}`);
+    console.log(`result=${result} changed=${changed}${diag}`);
   } catch (err) {
     console.error(`run failed: ${safeMessage(err)}`);
     process.exitCode = 1;
