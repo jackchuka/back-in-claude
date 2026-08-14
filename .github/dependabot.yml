@@ -19,6 +19,18 @@ updates:
       - "dependencies"
       - "javascript"
     target-branch: "main"
+    ignore:
+      # @types/node's major tracks the Node major it describes, so it has to move
+      # *with* the runtime, never ahead of it. engines.node is >=24.12.0 and both
+      # workflows pin node-version: "24" (Active LTS). @types/node 26 types against
+      # the Current line, so tsc would start accepting APIs — Temporal, for one —
+      # that throw on the Node 24 we actually run, and nothing would catch it: the
+      # typecheck IS the check, there is no separate runtime gate to fail second.
+      # Scoped to majors, so 24.x patches — where the actual type fixes land —
+      # still arrive. Delete this entry in the same PR that moves engines.node and
+      # both node-version pins to the next LTS, so the three cannot drift apart.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       # oxlint-tsgolint embeds a typescript-go build and its version tracks the
       # compiler (7.0.2001 pairs with typescript 7.0.2). Bumping one without the
