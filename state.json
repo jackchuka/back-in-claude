@@ -1,11 +1,11 @@
 {
-  "state": "blocked",
-  "since": "2026-08-15T19:03:04.101Z",
-  "last_probe": "2026-08-15T19:03:04.101Z",
-  "last_result": "rate_limited",
+  "state": "free",
+  "since": "2026-08-15T22:57:09.728Z",
+  "last_probe": "2026-08-15T22:57:09.728Z",
+  "last_result": "ok",
   "consecutive_errors": 0,
   "notified": {
-    "limit_reset": "2026-08-15T17:55:24.806Z",
+    "limit_reset": "2026-08-15T22:57:09.728Z",
     "auth_failed": null,
     "liveness": "2026-08-14T08:27:56.570Z"
   }
