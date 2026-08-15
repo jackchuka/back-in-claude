@@ -1,8 +1,8 @@
 {
-  "state": "free",
-  "since": "2026-08-14T20:50:16.470Z",
-  "last_probe": "2026-08-14T20:50:16.470Z",
-  "last_result": "ok",
+  "state": "blocked",
+  "since": "2026-08-15T04:51:20.761Z",
+  "last_probe": "2026-08-15T04:51:20.761Z",
+  "last_result": "rate_limited",
   "consecutive_errors": 0,
   "notified": {
     "limit_reset": "2026-08-14T20:50:16.470Z",
