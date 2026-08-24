@@ -1,9 +1,9 @@
 {
   "state": "free",
   "since": "2026-08-15T22:57:09.728Z",
-  "last_probe": "2026-08-24T07:14:04.620Z",
-  "last_result": "error",
-  "consecutive_errors": 3,
+  "last_probe": "2026-08-24T08:07:55.600Z",
+  "last_result": "ok",
+  "consecutive_errors": 0,
   "notified": {
     "limit_reset": "2026-08-15T22:57:09.728Z",
     "auth_failed": null,
