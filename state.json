@@ -1,12 +1,12 @@
 {
   "state": "free",
   "since": "2026-08-15T22:57:09.728Z",
-  "last_probe": "2026-09-24T22:33:30.084Z",
+  "last_probe": "2026-09-25T20:22:03.856Z",
   "last_result": "ok",
   "consecutive_errors": 0,
   "notified": {
     "limit_reset": "2026-08-15T22:57:09.728Z",
     "auth_failed": null,
-    "liveness": "2026-09-18T18:34:06.382Z"
+    "liveness": "2026-09-25T20:22:03.856Z"
   }
 }
