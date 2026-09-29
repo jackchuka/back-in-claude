@@ -24,10 +24,14 @@ jobs:
       - run: npm ci
       # Separate steps rather than `npm run check`, so a red build names the
       # gate that failed without opening the log.
-      - run: npm run typecheck
-      - run: npm run lint
-      - run: npm run format:check
-      - run: npm test
+      - name: Lint
+        run: npm run lint
+      - name: Format check
+        run: npm run fmt:check
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Test
+        run: npm test
 
   security:
     runs-on: ubuntu-latest

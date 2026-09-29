@@ -127,7 +127,7 @@ to `*/30` and expect correspondingly slower detection.
 
 ```bash
 npm install
-npm run check      # typecheck + lint + format:check + test
+npm run check      # typecheck + lint + fmt:check + test
 ```
 
 Individual scripts:
@@ -135,8 +135,9 @@ Individual scripts:
 ```bash
 npm run typecheck    # tsc --noEmit
 npm run lint         # oxlint --type-aware
-npm run format       # oxfmt
-npm run format:check # oxfmt --check
+npm run lint:fix     # oxlint --fix --type-aware
+npm run fmt          # oxfmt
+npm run fmt:check    # oxfmt --check
 npm test             # node --test, TypeScript run natively
 ```
 
