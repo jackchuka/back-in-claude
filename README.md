@@ -1,32 +1,71 @@
+<div align="center">
+
 # back-in-claude
 
-Get a phone push and an email the moment your Claude 5-hour usage window
-reopens. Runs entirely in GitHub Actions — nothing on your machine.
+**Know the moment your Claude 5-hour usage window reopens.**
 
-## How it works
+A GitHub Actions template that probes your Claude subscription on a schedule<br>
+and sends a phone push and an email when the limit resets. Nothing runs on your machine.
 
-A scheduled job runs one minimal Claude Code prompt using a subscription-issued
-`CLAUDE_CODE_OAUTH_TOKEN`. Rate-limited means still blocked; success means the
-window is open. The `blocked → free` transition sends the notification.
+[![ci](https://github.com/jackchuka/back-in-claude/actions/workflows/ci.yml/badge.svg)](https://github.com/jackchuka/back-in-claude/actions/workflows/ci.yml)
+[![probe](https://github.com/jackchuka/back-in-claude/actions/workflows/probe.yml/badge.svg)](https://github.com/jackchuka/back-in-claude/actions/workflows/probe.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Every delivered tick probes. The cron expression is the only throttle, so it is
-also the entire budget — `*/20` caps the cost at 72 probes/day and detects a
-reset within 20 minutes of it happening.
+```mermaid
+flowchart LR
+    cron["schedule<br/>(*/20 cron)"] --> probe["claude -p<br/>minimal prompt"]
+    probe --> classify{"classify"}
+    classify -->|rate_limited| blocked["state: blocked"]
+    classify -->|ok| free["state: free"]
+    blocked -. next probe ok .-> free
+    free -->|"blocked → free"| ntfy["ntfy.sh<br/>push + email"]
+```
 
-A probe costs 4,692 cache-creation input tokens plus 16 output tokens, about
-$0.047 — measured, not estimated. At `*/20` that is under 1% of a normal working
-day's usage, and less in practice: GitHub delivers scheduled workflows on public
-repositories unreliably, closer to one tick per hour than three.
+[How It Works](#how-it-works) · [Setup](#setup) · [Notifications](#notifications) · [Security](#security) · [Development](#development)
 
-`state.json` is committed only when the state means something new, so `git log`
-records transitions rather than every tick.
+</div>
 
-Full rationale, including the alternatives that were rejected and why, is in
-[docs/DESIGN.md](docs/DESIGN.md).
+---
+
+When you hit the Claude 5-hour usage limit, the only way to find out it has reset is to keep trying. **back-in-claude** does the trying for you: a scheduled workflow runs one tiny Claude Code prompt, and the first time it succeeds after being rate-limited, it sends you a notification through [ntfy](https://ntfy.sh).
+
+Full rationale, including the alternatives that were rejected and why, is in [docs/DESIGN.md](docs/DESIGN.md).
+
+## Features
+
+- **Runs entirely in GitHub Actions** — no daemon, no laptop that has to stay awake
+- **Push and email in one call** — a single ntfy POST reaches the ntfy app and, optionally, your inbox
+- **Notifies on transitions only** — `blocked → free` triggers the alert; repeated `ok` results stay silent
+- **Fail-safe classification** — anything not confidently recognised is an `error`, never a false all-clear
+- **Self-monitoring** — weekly heartbeat, a warning after repeated probe errors, and an alert when the token is rejected
+- **Quiet history** — `state.json` is committed only when the state means something new
+- **Hardened workflows** — SHA-pinned actions, a `main`-restricted environment for secrets, and `zizmor` in CI
+- **Zero runtime dependencies** — plain TypeScript run natively by Node 24, no build step
+
+## How It Works
+
+A scheduled job runs one minimal Claude Code prompt using a subscription-issued `CLAUDE_CODE_OAUTH_TOKEN`. Rate-limited means still blocked; success means the window is open. The `blocked → free` transition sends the notification.
+
+Each probe is classified as one of:
+
+| Result         | Meaning                                      |
+| -------------- | -------------------------------------------- |
+| `ok`           | The prompt succeeded; the window is open     |
+| `rate_limited` | The usage limit is still in effect           |
+| `auth_failed`  | The token was rejected                       |
+| `error`        | Anything else, including unrecognised output |
+
+**Cost.** Every delivered tick probes, so the cron expression is the only throttle and also the entire budget. `*/20` caps the cost at 72 probes/day and detects a reset within 20 minutes. A probe costs 4,692 cache-creation input tokens plus 16 output tokens, about $0.047 (measured, not estimated). At `*/20` that is under 1% of a normal working day's usage, and less in practice: GitHub delivers scheduled workflows on public repositories unreliably, closer to one tick per hour than three.
+
+| Schedule | Probes/day at 100% delivery |
+| -------- | --------------------------- |
+| `*/10`   | 144                         |
+| `*/20`   | 72 (default)                |
+| `*/30`   | 48                          |
 
 ## Setup
 
-1. **Use this template** to create your own repository.
+1. **[Use this template](https://github.com/new?template_name=back-in-claude&template_owner=jackchuka)** to create your own repository.
 
 2. Generate a long-lived subscription token:
 
@@ -34,18 +73,13 @@ Full rationale, including the alternatives that were rejected and why, is in
    claude setup-token
    ```
 
-3. Pick an unguessable ntfy topic and subscribe to it in the
-   [ntfy app](https://ntfy.sh/app). Save the value somewhere — you cannot read
-   it back out of GitHub later:
+3. Pick an unguessable ntfy topic and subscribe to it in the [ntfy app](https://ntfy.sh/app). Save the value somewhere; you cannot read it back out of GitHub later:
 
    ```bash
    openssl rand -hex 12
    ```
 
-4. **Create a `production` environment** (Settings → Environments → New
-   environment) and restrict its deployment branches to `main` only. Add the
-   three secrets there rather than at repository level, so a workflow running on
-   any other ref cannot read them:
+4. **Create a `production` environment** (Settings → Environments → New environment) and restrict its deployment branches to `main` only. Add the secrets there rather than at repository level, so a workflow running on any other ref cannot read them:
 
    | Secret                    | Value                          |
    | ------------------------- | ------------------------------ |
@@ -53,124 +87,83 @@ Full rationale, including the alternatives that were rejected and why, is in
    | `NTFY_TOPIC`              | the random string from step 3  |
    | `NOTIFY_EMAIL`            | optional, for email delivery   |
 
-5. **Protect `main` — but only with rules the bot can survive.** The workflow
-   pushes `state.json` directly to `main` on every state transition, a handful
-   of times a day. Use a **ruleset** (Settings → Rules → Rulesets), not classic
-   branch protection:
+5. **Protect `main` with rules the bot can survive.** The workflow pushes `state.json` directly to `main` on every state transition, a handful of times a day. Use a **ruleset** (Settings → Rules → Rulesets), not classic branch protection:
 
    - Target branch: `main`
-   - Enable **Restrict deletions** and **Block force pushes**. Neither blocks a
-     normal fast-forward push, so the bot is unaffected.
-   - **Do not enable _Require a pull request before merging_ or _Require status
-     checks to pass_.** Both reject direct pushes — a status check rule rejects
-     them because a direct push has no check run attached to its commit, which
-     is easy to miss since the rule sounds like it only governs PRs. Either one
-     makes every state commit fail to push: the run goes red and the transition
-     is lost, so the next probe re-detects the same reset and notifies again.
+   - Enable **Restrict deletions** and **Block force pushes**. Neither blocks a normal fast-forward push.
+   - **Do not enable _Require a pull request before merging_ or _Require status checks to pass_.** Both reject direct pushes (a direct push has no check run attached to its commit). Either one makes every state commit fail to push: the run goes red, the transition is lost, and the next probe re-detects the same reset and notifies again.
 
-   > On an **organisation-owned** repository you can keep those two rules by
-   > adding the `GitHub Actions` app as a **bypass actor**. On a **personal**
-   > repository you cannot — GitHub rejects it with _"Actor GitHub Actions
-   > integration must be part of the ruleset source or owner organization"_ —
-   > so the rules above are the only workable configuration.
+   > [!NOTE]
+   > On an **organisation-owned** repository you can keep those two rules by adding the `GitHub Actions` app as a **bypass actor**. On a **personal** repository you cannot (GitHub rejects it with _"Actor GitHub Actions integration must be part of the ruleset source or owner organization"_), so the rules above are the only workable configuration.
 
-   You lose no visibility: `ci.yml` still runs on every push and pull request,
-   so a failure is still red and still obvious. What you give up is the ability
-   to _block_ a merge on it.
+   You lose no visibility: `ci.yml` still runs on every push and pull request. What you give up is the ability to _block_ a merge on it. The workflow file is the sensitive asset, since anyone who can change it can read the token; review any pull request touching `.github/workflows/` accordingly.
 
-   The workflow file is the sensitive asset: anyone who can change it can read
-   the token. Review any pull request touching `.github/workflows/` accordingly.
+6. **Trigger a first run** to confirm everything is wired:
 
-6. Trigger a first run to confirm everything is wired:
-   `gh workflow run probe.yml`
+   ```bash
+   gh workflow run probe.yml
+   ```
 
-   It will report `result=ok` and send nothing. That is correct — see the first
-   bullet under [Behaviour worth knowing](#behaviour-worth-knowing).
+   It reports `result=ok` and sends nothing. That is correct: the first run is silent by design (see below).
+
+## Notifications
+
+| Title                        | Priority | When                                                                      |
+| ---------------------------- | -------- | ------------------------------------------------------------------------- |
+| **Claude limit reset**       | default  | The 5-hour window reopened (`blocked → free`)                             |
+| **Claude watchdog alive**    | low      | Weekly heartbeat. If it stops arriving, something is wrong                |
+| **Claude watchdog degraded** | high     | Four consecutive probe errors; reset detection may be delayed             |
+| **Claude watchdog is down**  | high     | The token was rejected. Re-run `claude setup-token` and update the secret |
+
+A reset notification looks like this in ntfy:
+
+```text
+Claude limit reset
+5-hour window is open again.
+```
+
+### Behaviour Worth Knowing
+
+- **The first run is silent.** State starts `unknown`, and `unknown → free` never notifies: there is no evidence a limit was ever hit, so an all-clear would be fabricated.
+- **The 60-day rule.** GitHub disables scheduled workflows in public repos after 60 days without repository activity, and only new commits reset that timer. State commits normally prevent this; the weekly heartbeat makes a dead watchdog visible if it happens anyway. Fix it with `gh workflow enable probe.yml`.
+- **The CLI cache key freezes the installed version.** `claude-cli-v1` in `probe.yml` pins whatever CLI build was cached under that key until the key is bumped. An expired or incompatible CLI surfaces as `auth_failed`, which notifies immediately.
+- **`git log` is public and records your limit transitions.** Commits land only on real state changes, but on a public repository the timestamps still show roughly when you get capped and when the window reopens. Use a private repo if that matters.
 
 ## Security
 
-**This repository is public and holds a secret equivalent to full Claude account
-access.** Read [SECURITY.md](SECURITY.md) before deploying your own copy — it
-covers the residual risks as well as the mitigations, including the ones that
-have not been eliminated.
+> [!WARNING]
+> A copy of this template holds a secret equivalent to **full Claude account access**. Read [SECURITY.md](SECURITY.md) before deploying it. It covers the residual risks as well as the mitigations, including the ones that have not been eliminated.
 
-The short version: this is safe only because of specific choices, all of which
-must be preserved:
+This setup is safe only because of specific choices, all of which must be preserved:
 
-- **Triggers are `schedule` and `workflow_dispatch` only.** **Never add
-  `pull_request_target`, `issue_comment`, or `workflow_run`** — these run
-  untrusted fork code with access to your secrets. `pull_request` is safe and is
-  used by `ci.yml`, which holds no secrets.
-- **The token lives in a `main`-restricted environment**, so a workflow on any
-  other ref cannot read it.
-- **All actions are SHA-pinned**, and Dependabot keeps those pins current —
-  review those PRs rather than merging them blindly.
-- **No untrusted interpolation.** Nothing from `github.event.*` is referenced in
-  any `run:` block. Secrets reach the process through `env:` only.
-- **`zizmor` runs in CI** and enforces the workflow half of these rules, so a
-  future misconfiguration fails the build rather than shipping.
-- **Raw CLI output is never logged.** It carries `session_id`, cost, and usage
-  figures, and public run logs are world-readable. The practical consequence: an
-  `error` classification cannot be debugged from the logs beyond its exit code
-  and stream lengths — reproduce locally instead.
-- **`CLAUDE_CODE_OAUTH_TOKEN` cannot be scoped down.** It is all-or-nothing
-  account access. Rotation — re-running `claude setup-token` and updating the
-  secret — is the only mitigation if you suspect exposure.
+- **Triggers are `schedule` and `workflow_dispatch` only.** **Never add `pull_request_target`, `issue_comment`, or `workflow_run`**: these run untrusted fork code with access to your secrets. `pull_request` is safe and is used by `ci.yml`, which holds no secrets.
+- **The token lives in a `main`-restricted environment**, so a workflow on any other ref cannot read it.
+- **All actions are SHA-pinned**, and Dependabot keeps those pins current. Review those PRs rather than merging them blindly.
+- **No untrusted interpolation.** Nothing from `github.event.*` is referenced in any `run:` block. Secrets reach the process through `env:` only.
+- **`zizmor` runs in CI** and enforces the workflow half of these rules, so a future misconfiguration fails the build rather than shipping.
+- **Raw CLI output is never logged.** It carries `session_id`, cost, and usage figures, and public run logs are world-readable. As a consequence, an `error` classification cannot be debugged from the logs beyond its exit code and stream lengths; reproduce locally instead.
+- **`CLAUDE_CODE_OAUTH_TOKEN` cannot be scoped down.** Rotation (re-running `claude setup-token` and updating the secret) is the only mitigation if you suspect exposure.
 
-**If you would rather not put an account token in a public repository**,
-instantiate this template as a **private** repo instead. Everything works
-identically, but Actions minutes then count against your own quota, and private
-repos bill each run at a one-minute floor — so drop the schedule in `probe.yml`
-to `*/30` and expect correspondingly slower detection.
+**If you would rather not put an account token in a public repository**, create your copy as a **private** repo. Everything works the same, but Actions minutes count against your own quota and private repos bill each run at a one-minute floor, so drop the schedule in `probe.yml` to `*/30` and expect slower detection. GitHub Free offers Environments on public repositories only, so on a private copy use repository secrets and remove the `environment:` line from `probe.yml`.
 
 ## Development
 
 ```bash
 npm install
 npm run check      # typecheck + lint + fmt:check + test
+npm run probe      # run one probe locally (needs the env vars above)
 ```
 
-Individual scripts:
+| Script              | Runs                                   |
+| ------------------- | -------------------------------------- |
+| `npm run typecheck` | `tsc --noEmit`                         |
+| `npm run lint`      | `oxlint --type-aware`                  |
+| `npm run lint:fix`  | `oxlint --fix --type-aware`            |
+| `npm run fmt`       | `oxfmt`                                |
+| `npm run fmt:check` | `oxfmt --check`                        |
+| `npm test`          | `node --test`, TypeScript run natively |
 
-```bash
-npm run typecheck    # tsc --noEmit
-npm run lint         # oxlint --type-aware
-npm run lint:fix     # oxlint --fix --type-aware
-npm run fmt          # oxfmt
-npm run fmt:check    # oxfmt --check
-npm test             # node --test, TypeScript run natively
-```
-
-Toolchain: TypeScript 7 (the Go-native `tsc`), oxlint with type-aware checking
-via `oxlint-tsgolint`, and oxfmt. No build step — Node 24+ strips types
-natively, so nothing is compiled before it runs. Zero runtime dependencies.
-
-## Behaviour worth knowing
-
-- **The first run is silent by design.** State starts `unknown`, and
-  `unknown → free` never notifies — there is no evidence a limit was ever hit,
-  so an all-clear would be fabricated.
-- **The 60-day rule.** GitHub disables scheduled workflows in public repos after
-  60 days without repository activity, and only new commits reset that timer.
-  State commits normally prevent this from ever being an issue; the weekly
-  liveness ping is the backstop that makes a dead watchdog visible if it happens
-  anyway. Fix with one command: `gh workflow enable probe.yml`.
-- **The four notification kinds:**
-  - **"Claude limit reset"** (normal) — the 5-hour window reopened.
-  - **"Claude watchdog alive"** (low, weekly) — heartbeat. If it stops arriving,
-    something is wrong; that is its purpose.
-  - **"Claude watchdog degraded"** (high) — four consecutive probe errors; reset
-    detection may be delayed.
-  - **"Claude watchdog is down"** (high) — the token was rejected. Re-run
-    `claude setup-token` and update the secret.
-- **The CLI cache key freezes the installed version.** `claude-cli-v1` in
-  `probe.yml` pins whatever CLI build was cached under that key until the key
-  itself is bumped. Detection is loud, not silent: an expired or incompatible
-  CLI surfaces as `auth_failed`, which notifies immediately.
-- **`git log` is public and records your limit transitions.** Commits land only
-  on real state changes, not on every probe, but on a public repository the
-  timestamps still show roughly when you get capped and when the window reopens.
-  Use a private repo if that matters.
+Toolchain: TypeScript 7 (the Go-native `tsc`), oxlint with type-aware checking via `oxlint-tsgolint`, and oxfmt. No build step: Node 24+ strips types natively. Zero runtime dependencies.
 
 ## License
 
